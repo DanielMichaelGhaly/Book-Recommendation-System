@@ -1,30 +1,52 @@
 import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
+import os
 
-from langchain.document_loaders import TextLoader
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.vectorstores import Chroma
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.schema import Document
+from langchain_community.document_loaders import TextLoader
+from langchain_text_splitters import CharacterTextSplitter
+# from langchain.vectorstores import Chroma
+# from langchain.embeddings import HuggingFaceEmbeddings
+
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+import chromadb
 
 import gradio as gr
 
 load_dotenv()
 
 books = pd.read_csv("books_with_emotions.csv")
-books["large_thumbnail"] = books["thumbnnail"] + "&fife=w800"
+books["isbn13"] = books["isbn13"].astype(str)
+books["large_thumbnail"] = books["thumbnail"] + "&fife=w800"
 books["large_thumbnail"] = np.where(books["large_thumbnail"].isna(), "cover-not-found.jpg", books["large_thumbnail"])
 
-raw_documents = TextLoader("tagged_description.txt", encoding = "utf-8").load()
-text_splitter = CharacterTextSplitter(chunk_size=0, chunk_overlap=0, separator="\n")
-documents = text_splitter.split_documents(raw_documents)
+# raw_documents = TextLoader("tagged_description.txt", encoding = "utf-8").load()
+# text_splitter = CharacterTextSplitter(chunk_size=0, chunk_overlap=0, separator="\n")
+# documents = text_splitter.split_documents(raw_documents)
+with open("tagged_description.txt", encoding = "utf-8") as f:
+    documents = [Document(page_content=line.strip())
+                 for line in f if line.strip()]
 
 emb = HuggingFaceEmbeddings(model_name = "sentence-transformers/all-MiniLM-L6-v2",
  encode_kwargs={"normalize_embeddings": True}
 )
 
-database_books= Chroma.from_documents(documents, embedding=emb)
+# PERSIST_DIR = "./chroma_store_books"
+# COLLECTION_NAME = "books"
+# client = chromadb.PersistentClient(path=PERSIST_DIR)
+#
+# if os.path.isdir(PERSIST_DIR) and os.listdir(PERSIST_DIR):
+#
+#     database_books = Chroma(
+#         collection_name = COLLECTION_NAME,
+#         embedding_function = emb,
+#         client = client
+#     )
+# else:
+database_books= Chroma.from_documents(documents = documents,
+        embedding = emb)
 
 def retrieve_semantic_recommendations(
         query: str,
@@ -34,7 +56,7 @@ def retrieve_semantic_recommendations(
         final_top_k: int = 16,
 )-> pd.DataFrame:
   recs = database_books.similarity_search(query, k = initial_top_k)
-  books_list = [int(rec.page_content.strip('"').split()[0]) for rec in recs]
+  books_list = [rec.page_content.split()[0].strip('"') for rec in recs]
   books_recs = books[books["isbn13"].isin(books_list)].head(final_top_k)
 
   if category != "All":
@@ -62,6 +84,9 @@ def recommend_books(
 ):
 
  recommendations = retrieve_semantic_recommendations(query, category, tone)
+ if recommendations.empty:
+     return [("https://via.placeholder.com/200x300?text=No+Matches",
+              "No matches found-try a different description or category.")]
  results = []
 
  for _, row in recommendations.iterrows():
@@ -102,4 +127,4 @@ with gr.Blocks(theme = gr.themes.Glass()) as dashboard:
                      outputs = output)
 
 if __name__ == "__main__":
- dashboard.launch()
+ dashboard.launch(server_name="127.0.0.1", server_port=7860)
